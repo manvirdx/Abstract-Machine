@@ -101,72 +101,53 @@ p_readback((p, [])) = p
 -------------------------------------
 -- Part 2: Krivine Abstract Machine--
 -------------------------------------
-data Closure = Closure (Term, Env)
-instance Show Closure where show = pretty_closure 
+data Env = Env [(Var,Term,Env)]
 
-data Env = Env [(Var, Closure)]
-instance Show Env where show = pretty_env
+type State = (Term,Env,[(Term,Env)])
 
-data State = State (Closure, [Closure])
-instance Show State where show = pretty_state
+instance Show Env where
+  show (Env e) = show e
 
-pretty_closure :: Closure -> String
-pretty_closure (Closure (c, Env [])) = "(" ++ show c ++ ",[])"
-pretty_closure (Closure c) = show c
+state2 = (Apply (Lambda "x" (Variable "x")) (Variable "y") , Env [("y",Lambda "z" (Variable "z"), Env [])], [])
 
-pretty_env :: Env -> String
-pretty_env (Env []) = ""
-pretty_env (Env e) = show e
+state3 = (Apply (Variable "x") (Variable "x"), Env [("x", Lambda "x" (Apply (Variable "x") (Variable "x")) , Env [])], [])
 
-pretty_state :: State -> String
-pretty_state (State (c, [])) = "(" ++ pretty_closure c ++ ",[])"
-pretty_state (State (c, stack_c)) = "(" ++ pretty_closure c ++ "," ++ show stack_c ++ ")"
+state4 = (Lambda "y" (Variable "x") , Env [] , [(Variable "z" , Env [("z", Lambda "a" (Variable "b") , Env [("b", Variable "c" , Env [])])])]) 
 
-state2 = State ((Closure ((Apply (Lambda "x" (Variable "x")) (Variable "y")), Env [("y", Closure ((Lambda "z" (Variable "z")), (Env [])))])), [])
-state3 = State (Closure ((Apply (Variable "x") (Variable "x")), Env [("x", Closure (Lambda "x" (Apply (Variable "x") (Variable "x")), Env []))]), []) 
-state4 = State (Closure ((Lambda "y" (Variable "x")), Env []), [Closure ((Variable "z"), Env [("z", Closure ((Lambda "a" (Variable "b")), Env [("b", Closure ((Variable "c"), Env []))]))])])
- 
+
+-------------------------
+
 start :: Term -> State
-start t = State(Closure(t, Env []), [])
+start n = (n, Env [], [])
 
 step :: State -> State
-step (State (Closure ((Variable x), Env ((y, Closure (n, f)):e)), es)) = if x == y 
-                                                                         then State (Closure (n, f), es) 
-                                                                         else State (Closure (Variable x, Env e), es)                                                                       
-step (State (Closure ((Lambda z n), Env e), Closure (m, f):es)) = State (Closure (n, (Env ((z, Closure(m, f)):e))),es)
-step (State (Closure ((Apply n m),  e), es)) = State (Closure (n, e), Closure (m,e):es)
- 
+step (Variable x , Env ((y,m,f):e) , cs)
+  | x == y                          = (m,f,cs)
+  | otherwise                       = (Variable x, Env e, cs)
+step (Lambda x n , Env e, (m,f):cs) = (n, Env ((x,m,f):e), cs)
+step (Apply  n m ,     e,       cs) = (n, e, (m,e):cs)
+
 final :: State -> Bool
-final (State (Closure (Lambda z n, e), [])) = True
-final (State (Closure (Variable v, Env []), e)) = True
+final (Variable _ , Env [] ,  _) = True
+final (Lambda _ _ ,      _ , []) = True
 final _ = False
 
 run :: Term -> IO ()
-run p = do
-        let t = start p in kam_run_machine t
-            where    
-                kam_run_machine :: State -> IO ()
-                kam_run_machine t = do
-                   if final t
-                   then do
-                       print t
-                       print (readback t)
-                   else do
-                       print t
-                       kam_run_machine (step t)            
+run = loop . start
+  where
+    loop st = do
+      print st
+      if final st then
+        print (readback st)
+      else
+        loop (step st)
 
 readback :: State -> Term
-readback (State(c, [])) = send_back c
-readback (State(c, xs)) = Apply (send_back c) (iterate_closures xs) 
-    where
-        iterate_closures :: [Closure] -> Term
-        iterate_closures ([c]) = send_back c
-        iterate_closures (x:xs) =  Apply (send_back x) (iterate_closures xs)
-        
-send_back :: Closure -> Term
-send_back (Closure((Variable x, Env []))) = Variable x
-send_back (Closure((Variable x, Env ((y, Closure (n, Env e)) : f)))) = if x == y 
-                                                                       then send_back (Closure (n, Env e)) 
-                                                                       else send_back (Closure (Variable x, Env f))                                                                      
-send_back (Closure((Lambda x n), Env e)) = (Lambda x (send_back((Closure (n, Env ((x, (Closure(Variable x, Env []))): e))))))
-send_back (Closure ((Apply n m), Env e)) = Apply (send_back (Closure (n, Env e))) (send_back (Closure (m, Env e)))
+readback (n,Env e,cs) = foldl Apply (close n e) [close m f | (m,Env f) <- cs]
+ where
+  close (Variable x) [] = Variable x
+  close (Variable x) ((y,m,Env f):e)
+    | x == y            = close m f
+    | otherwise         = close (Variable x) e
+  close (Lambda x n)  e = Lambda x (close n ((x,Variable x, Env []):e))
+  close (Apply  n m)  e = Apply (close n e) (close m e)
